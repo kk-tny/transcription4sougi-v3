@@ -16,8 +16,8 @@ async function startServer() {
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    // '*' を '(.*)' に書き換えます。これにより、すべてのパスにマッチするようになります。
-    app.get("(.*)", (req, res) => {
+    // '*' を '(.*all)' に書き換えます。これにより、すべてのパスにマッチするようになります。
+    app.get("*all", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
