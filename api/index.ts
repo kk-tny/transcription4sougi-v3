@@ -2,7 +2,7 @@ import express from "express";
 import { google } from "googleapis";
 import cors from "cors";
 import axios from "axios";
-import { GoogleGenAI, Type } from "@google/genai"; // Type を追加
+import { GoogleGenAI, Type } from "@google/genai";
 
 const app = express();
 
@@ -30,7 +30,7 @@ app.post("/api/analyze", async (req, res) => {
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // AIへの厳密な指示文と出力スキーマの定義
+    // Vercel 時代のプロンプトを完全に復元
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: [
@@ -38,42 +38,49 @@ app.post("/api/analyze", async (req, res) => {
           role: 'user',
           parts: [
             { inlineData: { data: audioData.data, mimeType: audioData.mimeType } },
-            { text: `葬儀社の受付として、音声の内容を正確に抽出し、以下のJSON形式で回答してください。
-            
-{
-  "callerName": "ご相談者様の名前。不明な場合は「不明」",
-  "subjectName": "ご対象者（故人様）の名前。不明な場合は「不明」",
-  "responderNames": ["応対したスタッフの名前を配列で"],
-  "inquiryType": "問い合わせの種類（例：搬送依頼、事前相談、訃報連絡等）",
-  "details": ["具体的な内容の要点を箇条書きの配列で"],
-  "transcription": [
-    { "speaker": "話者名", "transcript": "話した内容" }
-  ]
-}` }
+            { text: "葬儀社に掛かってきた電話の音声を解析し、指定されたフォーマットで情報を抽出してください。特に名前は必ず「ひらがな」で抽出してください。" }
           ]
         }
       ],
       config: {
-        responseMimeType: "application/json", // JSONで返すよう強制
+        systemInstruction: `あなたは葬儀社の熟練事務スタッフです。葬儀社宛の電話内容を正確に解析し、以下の項目を抽出してください。
+
+1. ご相談者様名: 電話をしてきた人の名前。必ず「ひらがな」で抽出してください。不明な場合は「不明」としてください。
+2. ご対象者様名: 亡くなられた方の名前。必ず「ひらがな」で抽出してください。不明な場合は「不明」としてください。
+3. 応対者名: 電話を受けた葬儀社側のスタッフ名。必ず「ひらがな」で抽出してください。音声内で名乗らなかったため名前がわからない場合は「不明（名乗らず）」としてください。複数いる場合、電話を受けた順番（会話に登場した順）にリスト形式で抽出してください。
+4. 問い合わせの種類: 以下の定義に基づき、最も適切なものを1つ選んでください。
+   - 訃報: 家族や身内が亡くなった状況での葬儀相談
+   - 事前相談: 家族や身内でもうすぐ亡くなる可能性がある方の葬儀相談
+   - 自身の事前相談: 電話をしてきた人本人が、将来自分自身が亡くなった時の葬儀を検討している相談
+   - 参列問い合わせ: 誰かの葬儀に参列するために、時間確認や会場への行き方を知りたい方からのお問合せ
+   - 供花、供物の注文依頼: 誰かの葬儀に贈る葬儀の御花や供物の注文についてのお問合せ
+   - 間違い電話（葬儀社宛）: 自社以外の葬儀社 / 葬儀式場 / 葬儀会館と間違えたもの
+   - 間違い電話（葬儀社以外宛）: 葬儀社 / 葬儀式場 / 葬儀会館とは関係のない場所と間違えたもの
+   - その他: 上記に該当しない内容のお問合せ
+5. 具体的な内容: 電話の内容を簡潔な箇条書き（「・」で始まる形式）でまとめてください。
+6. 文字起こし: 全ての会話を話者ごとに正確に記録してください。`,
+        responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
           properties: {
             callerName: { type: Type.STRING },
             subjectName: { type: Type.STRING },
             responderNames: { type: Type.ARRAY, items: { type: Type.STRING } },
-            inquiryType: { type: Type.STRING },
+            inquiryType: { 
+              type: Type.STRING,
+              enum: ['訃報', '事前相談', '自身の事前相談', '参列問い合わせ', '供花、供物の注文依頼', '間違い電話（葬儀社宛）', '間違い電話（葬儀社以外宛）', 'その他']
+            },
             details: { type: Type.ARRAY, items: { type: Type.STRING } },
             transcription: {
               type: Type.ARRAY,
               items: {
                 type: Type.OBJECT,
-                properties: {
-                  speaker: { type: Type.STRING },
-                  transcript: { type: Type.STRING }
-                }
+                properties: { speaker: { type: Type.STRING }, transcript: { type: Type.STRING } },
+                required: ["speaker", "transcript"]
               }
             }
-          }
+          },
+          required: ["callerName", "subjectName", "responderNames", "inquiryType", "details", "transcription"]
         }
       }
     });
@@ -85,7 +92,6 @@ app.post("/api/analyze", async (req, res) => {
   }
 });
 
-// (以下、sheets/data, update-row, proxy-audio は前回と同じ)
 app.get("/api/sheets/data", async (req, res) => {
   try {
     const sheets = getSheetsClient();
@@ -100,14 +106,16 @@ app.post("/api/sheets/update-row", async (req, res) => {
     const { rowIndex, data } = req.body;
     const sheets = getSheetsClient();
     const spreadsheetId = process.env.SPREADSHEET_ID;
-    // 配列の結合処理が含まれているか確認
+    
+    // スプレッドシート側の期待に合わせて整形
     const values = [[
       data.callerName,
       data.subjectName,
       data.inquiryType,
-      data.details,
-      data.responderNames
+      data.details.map((d: string) => `・${d}`).join('\n'), // 箇条書きに戻す
+      data.responderNames.join('　→　') // 矢印で繋ぐ
     ]];
+
     const actualRow = rowIndex + 4;
     await sheets.spreadsheets.values.update({
       spreadsheetId,
