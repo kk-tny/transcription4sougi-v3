@@ -2,7 +2,7 @@ import express from "express";
 import { google } from "googleapis";
 import cors from "cors";
 import axios from "axios";
-import { GoogleGenAI } from "@google/genai"; // 追加
+import { GoogleGenerativeAI } from "@google/genai";
 
 const app = express();
 
@@ -30,7 +30,7 @@ app.post("/api/analyze", async (req, res) => {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set on server");
 
-    const genAI = new GoogleGenAI(apiKey);
+    const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
     // 元々の Gemini への指示文
