@@ -2,12 +2,12 @@ import express from "express";
 import { google } from "googleapis";
 import cors from "cors";
 import axios from "axios";
-import { GoogleGenerativeAI } from "@google/genai";
+import { GoogleGenAI } from "@google/genai"; // GoogleGenAI に戻します
 
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '100mb' })); // 容量を大きく
+app.use(express.json({ limit: '100mb' }));
 
 // Google Sheets Auth Helper
 const getSheetsClient = () => {
@@ -30,26 +30,34 @@ app.post("/api/analyze", async (req, res) => {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set on server");
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    // @google/genai の正しい初期化
+    const ai = new GoogleGenAI({ apiKey });
 
-    // 元々の Gemini への指示文
     const prompt = `あなたは葬儀社のベテラン事務スタッフです。添付された音声を解析して、指定の形式で出力してください。`;
 
-    const result = await model.generateContent([
-      { inlineData: audioData },
-      prompt
-    ]);
+    // @google/genai の正しい呼び出し方
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview", // 推奨される最新モデル
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { inlineData: { data: audioData.data, mimeType: audioData.mimeType } },
+            { text: prompt }
+          ]
+        }
+      ]
+    });
 
-    // 解析結果のテキストをそのまま返す
-    res.json({ text: result.response.text() });
+    // 解析結果のテキストを返す (.text() ではなく .text プロパティです)
+    res.json({ text: response.text });
   } catch (error: any) {
     console.error("Gemini Error:", error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// スプレッドシートデータの取得
+// スプレッドシートデータの取得 (省略せず実装済み)
 app.get("/api/sheets/data", async (req, res) => {
   try {
     const sheets = getSheetsClient();
@@ -64,7 +72,7 @@ app.get("/api/sheets/data", async (req, res) => {
   }
 });
 
-// スプレッドシートへの書き込み
+// スプレッドシートへの書き込み (省略せず実装済み)
 app.post("/api/sheets/update-row", async (req, res) => {
   try {
     const { rowIndex, data } = req.body;
