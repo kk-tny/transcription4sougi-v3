@@ -16,6 +16,7 @@ RUN npm run build
 
 # Expose the port (Cloud Run sets PORT env var automatically).
 EXPOSE 8080
+ENV PORT 8080
 
 # Command to run the application.
 CMD ["npm", "start"]
