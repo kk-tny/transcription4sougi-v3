@@ -2,14 +2,13 @@ import express from "express";
 import { google } from "googleapis";
 import cors from "cors";
 import axios from "axios";
-import { GoogleGenAI } from "@google/genai"; // GoogleGenAI に戻します
+import { GoogleGenAI, Type } from "@google/genai"; // Type を追加
 
 const app = express();
 
 app.use(cors());
 app.use(express.json({ limit: '100mb' }));
 
-// Google Sheets Auth Helper
 const getSheetsClient = () => {
   const jsonKey = process.env.GOOGLE_SHEETS_JSON_KEY;
   if (!jsonKey) throw new Error("GOOGLE_SHEETS_JSON_KEY is not set");
@@ -23,33 +22,62 @@ const getSheetsClient = () => {
 
 // --- API Routes ---
 
-// Gemini解析プロキシ
 app.post("/api/analyze", async (req, res) => {
   try {
     const { audioData } = req.body;
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) throw new Error("GEMINI_API_KEY is not set on server");
 
-    // @google/genai の正しい初期化
     const ai = new GoogleGenAI({ apiKey });
 
-    const prompt = `あなたは葬儀社のベテラン事務スタッフです。添付された音声を解析して、指定の形式で出力してください。`;
-
-    // @google/genai の正しい呼び出し方
+    // AIへの厳密な指示文と出力スキーマの定義
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview", // 推奨される最新モデル
+      model: "gemini-3-flash-preview",
       contents: [
         {
           role: 'user',
           parts: [
             { inlineData: { data: audioData.data, mimeType: audioData.mimeType } },
-            { text: prompt }
+            { text: `葬儀社の受付として、音声の内容を正確に抽出し、以下のJSON形式で回答してください。
+            
+{
+  "callerName": "ご相談者様の名前。不明な場合は「不明」",
+  "subjectName": "ご対象者（故人様）の名前。不明な場合は「不明」",
+  "responderNames": ["応対したスタッフの名前を配列で"],
+  "inquiryType": "問い合わせの種類（例：搬送依頼、事前相談、訃報連絡等）",
+  "details": ["具体的な内容の要点を箇条書きの配列で"],
+  "transcription": [
+    { "speaker": "話者名", "transcript": "話した内容" }
+  ]
+}` }
           ]
         }
-      ]
+      ],
+      config: {
+        responseMimeType: "application/json", // JSONで返すよう強制
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            callerName: { type: Type.STRING },
+            subjectName: { type: Type.STRING },
+            responderNames: { type: Type.ARRAY, items: { type: Type.STRING } },
+            inquiryType: { type: Type.STRING },
+            details: { type: Type.ARRAY, items: { type: Type.STRING } },
+            transcription: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  speaker: { type: Type.STRING },
+                  transcript: { type: Type.STRING }
+                }
+              }
+            }
+          }
+        }
+      }
     });
 
-    // 解析結果のテキストを返す (.text() ではなく .text プロパティです)
     res.json({ text: response.text });
   } catch (error: any) {
     console.error("Gemini Error:", error);
@@ -57,28 +85,29 @@ app.post("/api/analyze", async (req, res) => {
   }
 });
 
-// スプレッドシートデータの取得 (省略せず実装済み)
+// (以下、sheets/data, update-row, proxy-audio は前回と同じ)
 app.get("/api/sheets/data", async (req, res) => {
   try {
     const sheets = getSheetsClient();
     const spreadsheetId = process.env.SPREADSHEET_ID;
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: "シート1!A4:G",
-    });
+    const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: "シート1!A4:G" });
     res.json({ values: response.data.values || [] });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  } catch (error: any) { res.status(500).json({ error: error.message }); }
 });
 
-// スプレッドシートへの書き込み (省略せず実装済み)
 app.post("/api/sheets/update-row", async (req, res) => {
   try {
     const { rowIndex, data } = req.body;
     const sheets = getSheetsClient();
     const spreadsheetId = process.env.SPREADSHEET_ID;
-    const values = [[data.callerName, data.subjectName, data.inquiryType, data.details, data.responderNames]];
+    // 配列の結合処理が含まれているか確認
+    const values = [[
+      data.callerName,
+      data.subjectName,
+      data.inquiryType,
+      data.details,
+      data.responderNames
+    ]];
     const actualRow = rowIndex + 4;
     await sheets.spreadsheets.values.update({
       spreadsheetId,
@@ -87,21 +116,16 @@ app.post("/api/sheets/update-row", async (req, res) => {
       requestBody: { values },
     });
     res.json({ success: true });
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
+  } catch (error: any) { res.status(500).json({ error: error.message }); }
 });
 
-// 音源プロキシ
 app.get("/api/proxy-audio", async (req, res) => {
   try {
     const url = req.query.url as string;
     const response = await axios.get(url, { responseType: 'arraybuffer' });
     res.set('Content-Type', response.headers['content-type']);
     res.send(response.data);
-  } catch (error: any) {
-    res.status(500).send(error.message);
-  }
+  } catch (error: any) { res.status(500).send(error.message); }
 });
 
 export default app;
