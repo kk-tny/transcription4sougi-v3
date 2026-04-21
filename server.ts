@@ -4,7 +4,7 @@ import path from "path";
 import app from "./api/index";
 
 async function startServer() {
-  const PORT = process.env.PORT || 3000;
+  const PORT = process.env.PORT || "8080";  // 文字列として扱い、デフォルトを8080に
 
   // --- Vite Middleware ---
   if (process.env.NODE_ENV !== "production") {
@@ -21,7 +21,7 @@ async function startServer() {
     });
   }
 
-  app.listen(Number(PORT), "0.0.0.0", () => {
+  app.listen(parseInt(PORT), "0.0.0.0", () => {
     console.log(`Server running on port ${PORT}`);
   });
 }
