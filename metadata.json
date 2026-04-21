@@ -1,0 +1,5 @@
+{
+  "name": "【葬儀社用】Gemini 音声文字起こしVer1.01",
+  "description": "Gemini APIを使用して音声ファイルをテキストに書き起こすアプリケーションです。デバイスから音声ファイルをアップロードするか、音声ファイルのURLを指定して文字起こしができます。",
+  "requestFramePermissions": []
+}
