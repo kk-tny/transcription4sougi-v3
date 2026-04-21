@@ -30,7 +30,6 @@ app.post("/api/analyze", async (req, res) => {
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // Vercel 時代のプロンプトを完全に復元
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
       contents: [
@@ -104,16 +103,24 @@ app.get("/api/sheets/data", async (req, res) => {
 app.post("/api/sheets/update-row", async (req, res) => {
   try {
     const { rowIndex, data } = req.body;
+    console.log(`Writing at index ${rowIndex}...`);
     const sheets = getSheetsClient();
     const spreadsheetId = process.env.SPREADSHEET_ID;
     
-    // スプレッドシート側の期待に合わせて整形
+    // 内容が配列なら結合し、文字列ならそのまま使う (一括処理のエラー対策)
+    const formatValue = (val: any, joiner: string = '\n') => {
+      if (Array.isArray(val)) {
+        return val.join(joiner);
+      }
+      return val || "";
+    };
+
     const values = [[
-      data.callerName,
-      data.subjectName,
-      data.inquiryType,
-      data.details.map((d: string) => `・${d}`).join('\n'), // 箇条書きに戻す
-      data.responderNames.join('　→　') // 矢印で繋ぐ
+      data.callerName || "",
+      data.subjectName || "",
+      data.inquiryType || "",
+      formatValue(data.details),
+      formatValue(data.responderNames, '　→　')
     ]];
 
     const actualRow = rowIndex + 4;
@@ -123,8 +130,13 @@ app.post("/api/sheets/update-row", async (req, res) => {
       valueInputOption: "RAW",
       requestBody: { values },
     });
+
+    console.log("Success!");
     res.json({ success: true });
-  } catch (error: any) { res.status(500).json({ error: error.message }); }
+  } catch (error: any) {
+    console.error("Sheets Update Error:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.get("/api/proxy-audio", async (req, res) => {
