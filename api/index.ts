@@ -36,7 +36,7 @@ app.post("/api/analyze", async (req, res) => {
 
     // Vercel 時代のプロンプトを完全に復元
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash", 
+      model: "gemini-3-flash-preview", 
       contents: [
         {
           role: 'user',
