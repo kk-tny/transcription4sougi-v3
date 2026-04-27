@@ -83,9 +83,14 @@ const FileInputForm: React.FC<FileInputFormProps> = ({ file, onFileChange, isLoa
 
 // --- Result View Component --- //
 const ResultDisplay: React.FC<{ result: TranscriptionResult }> = ({ result }) => {
+  // 応対者名の正規化（ふめい(なのらず) を 不明（名乗らず） に統一）
+  const normalizedResponders = result.responderNames.map(name => 
+    (name === 'ふめい（なのらず）' || name === 'ふめい' || name === '不明') ? '不明（名乗らず）' : name
+  );
+
   // 応対者名のフォーマット（複数いる場合は矢印で繋ぐ）
-  const formattedResponders = result.responderNames.length > 0 
-    ? result.responderNames.join('　→　') 
+  const formattedResponders = normalizedResponders.length > 0 
+    ? normalizedResponders.join('　→　') 
     : '不明（名乗らず）';
 
   // ユーザー指定の厳密なフォーマット
@@ -276,6 +281,12 @@ export default function App() {
             const analysis = await transcribeAudio({ mimeType: blob.type, data: base64 });
 
             setBatchProgress(p => ({ ...p, status: `行 ${i + 4}: スプレッドシートに書き込み中...` }));
+            
+            // 応対者名の正規化（ふめい(なのらず) を 不明（名乗らず） に統一）
+            const normalizedResponders = analysis.responderNames.map(name => 
+              (name === 'ふめい（なのらず）' || name === 'ふめい' || name === '不明') ? '不明（名乗らず）' : name
+            );
+
             await fetch('/api/sheets/update-row', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -284,9 +295,9 @@ export default function App() {
                 data: {
                   callerName: analysis.callerName,
                   subjectName: analysis.subjectName,
-                  responderNames: analysis.responderNames.join('　→　'),
+                  responderNames: normalizedResponders.join('　→　'),
                   inquiryType: analysis.inquiryType,
-                  details: analysis.details.join('\n')
+                  details: analysis.details.map(d => d.startsWith('・') ? d : `・${d}`).join('\n')
                 }
               })
             });
@@ -299,24 +310,24 @@ export default function App() {
               setBatchProgress(p => ({ ...p, status: `行 ${i + 4}: 完了。次へ進みます...` }));
               await new Promise(resolve => setTimeout(resolve, 500)); 
             }
-
           } catch (err: any) {
             console.error(`Error processing row ${i + 4}:`, err);
             
             // 有料プランでも稀に発生する可能性があるため、短い待機で再試行
-            if (err.message?.includes('429') || err.message?.includes('quota')) {
-              retryCount++;
-              if (retryCount < maxRetries) {
-                setBatchProgress(p => ({ ...p, status: `行 ${i + 4}: 一時的な制限。5秒待機して再試行します (${retryCount}/${maxRetries})...` }));
-                await new Promise(resolve => setTimeout(resolve, 5000)); 
-              } else {
-                setBatchProgress(p => ({ ...p, status: `行 ${i + 4}: 制限によりスキップします` }));
-              }
-            } else {
-              // その他のエラーはスキップ
-              setBatchProgress(p => ({ ...p, status: `行 ${i + 4}: エラーのためスキップします` }));
-              break; 
+            if (err.message) {
+                const isRateLimit = err.message.includes('429') || err.message.includes('quota') || err.message.includes('limit');
+                if (isRateLimit) {
+                  retryCount++;
+                  if (retryCount < maxRetries) {
+                    setBatchProgress(p => ({ ...p, status: `行 ${i + 4}: 一時的な制限。5秒待機して再試行します (${retryCount}/${maxRetries})...` }));
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    continue; 
+                  }
+                }
             }
+            
+            setBatchProgress(p => ({ ...p, status: `行 ${i + 4}: エラーのためスキップします` }));
+            break; 
           }
         }
       }
