@@ -100,7 +100,7 @@ const ResultDisplay: React.FC<{ result: TranscriptionResult }> = ({ result }) =>
 ◎問い合わせの種類　：　${result.inquiryType}
 
 ◎具体的な内容
-${result.details.map(d => `・${d}`).join('\n')}
+${result.details.map(d => d.startsWith('・') ? d : `・${d}`).join('\n')}
 
 =====================================`;
 
