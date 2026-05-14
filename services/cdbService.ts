@@ -1,0 +1,61 @@
+import axios from 'axios';
+
+export interface CdbCallLog {
+  account_name: string;
+  campaign_name: string;
+  call_at: string;
+  observation_point_name: string;
+  duration: number;
+  caller_number: string;
+  media_number: string;
+  termination_reason: string;
+  audio_url: string;
+}
+
+export async function getCdbAuthToken(): Promise<string> {
+  const email = process.env.CDB_EMAIL;
+  const password = process.env.CDB_PASSWORD;
+  const consumerId = process.env.CDB_SERVICE_CONSUMER_ID || '1';
+
+  if (!email || !password) {
+    throw new Error('CDB_EMAIL or CDB_PASSWORD is not set in environment variables');
+  }
+
+  const response = await axios.post('https://api-2.omni-databank.com/login', {
+    email,
+    password
+  }, {
+    headers: { 'ServiceConsumerID': consumerId }
+  });
+
+  if (!response.data || !response.data.token) {
+    throw new Error('Failed to get authentication token from CDB API');
+  }
+
+  return response.data.token;
+}
+
+export async function getCallLogs(token: string, startDate: string, endDate: string): Promise<CdbCallLog[]> {
+  const consumerId = process.env.CDB_SERVICE_CONSUMER_ID || '1';
+  
+  const response = await axios.get('https://api-2.omni-databank.com/call_logs', {
+    params: { start_date: startDate, end_date: endDate },
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'ServiceConsumerID': consumerId
+    }
+  });
+
+  // API仕様に合わせてデータを整形（必要に応じて調整）
+  return response.data.map((log: any) => ({
+    account_name: log.account_name,
+    campaign_name: log.campaign_name,
+    call_at: log.call_at,
+    observation_point_name: log.observation_point_name,
+    duration: log.duration,
+    caller_number: log.caller_number,
+    media_number: log.media_number,
+    termination_reason: log.termination_reason,
+    audio_url: log.audio_url
+  }));
+}
