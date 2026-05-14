@@ -1,8 +1,8 @@
 import { google } from "googleapis";
 import axios from "axios";
-import { getCdbAuthToken, getCallLogs, CdbCallLog } from "./cdbService";
-import { analyzeAudioServer } from "./geminiService";
-import { sendChatworkNotification } from "./chatworkService";
+import { getCdbAuthToken, getCallLogs, CdbCallLog } from "./cdbService.ts";
+import { analyzeAudioServer } from "./geminiService.ts";
+import { sendChatworkNotification } from "./chatworkService.ts";
 
 // Google Sheets クライアントの初期化
 const getSheetsClient = () => {
