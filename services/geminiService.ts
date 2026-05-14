@@ -6,9 +6,19 @@ export async function analyzeAudioServer(audioData: { mimeType: string; data: st
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
 
   const ai = new GoogleGenAI({ apiKey });
-  const model = ai.getGenerativeModel({
+  const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    systemInstruction: `あなたは葬儀社の熟練事務スタッフです。葬儀社宛の電話内容を正確に解析し、以下の項目を抽出してください。
+    contents: [
+      {
+        role: 'user',
+        parts: [
+          { inlineData: { data: audioData.data, mimeType: audioData.mimeType } },
+          { text: "葬儀社に掛かってきた電話の音声を解析し、指定されたフォーマットで情報を抽出してください。特に名前は必ず「ひらがな」で抽出してください。" }
+        ]
+      }
+    ],
+    config: {
+      systemInstruction: `あなたは葬儀社の熟練事務スタッフです。葬儀社宛の電話内容を正確に解析し、以下の項目を抽出してください。
 
 1. ご相談者様名: 電話をしてきた人の名前。必ず「ひらがな」で抽出してください。不明な場合は「不明」としてください。
 2. ご対象者様名: 亡くなられた方の名前。必ず「ひらがな」で抽出してください。不明な場合は「不明」としてください。
@@ -25,19 +35,6 @@ export async function analyzeAudioServer(audioData: { mimeType: string; data: st
    - その他: 上記に該当しない内容のお問合せ
 5. 具体的な内容: 電話の内容を簡潔にまとめてください。出力形式は「・」で始まる箇条書き（Array形式）とし、各要素の冒頭には必ず「・」を含めてください。
 6. 文字起こし: 全ての会話を話者ごとに正確に記録してください。`,
-  });
-
-  const response = await model.generateContent({
-    contents: [
-      {
-        role: 'user',
-        parts: [
-          { inlineData: { data: audioData.data, mimeType: audioData.mimeType } },
-          { text: "葬儀社に掛かってきた電話の音声を解析し、指定されたフォーマットで情報を抽出してください。特に名前は必ず「ひらがな」で抽出してください。" }
-        ]
-      }
-    ],
-    generationConfig: {
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
@@ -64,7 +61,9 @@ export async function analyzeAudioServer(audioData: { mimeType: string; data: st
     }
   });
 
-  return JSON.parse(response.response.text());
+  const text = response.text;
+  if (!text) throw new Error("AIからの応答が空でした");
+  return JSON.parse(text);
 }
 
 // クライアントサイドでの互換性のために残す（既存のコードが fetch を使っている場合用）
