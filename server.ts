@@ -1,8 +1,8 @@
 import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
-import app from "./api/index";
-import { runAutoAnalysis } from "./services/autoAnalysisService";
+import app from "./api/index.ts";
+import { runAutoAnalysis } from "./services/autoAnalysisService.ts";
 
 async function startServer() {
   const PORT = process.env.PORT || 3000;
