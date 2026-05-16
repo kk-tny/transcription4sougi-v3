@@ -35,10 +35,17 @@ export async function getCdbAuthToken(): Promise<string> {
 }
 
 export async function getCallLogs(token: string, startDate: string, endDate: string): Promise<CdbCallLog[]> {
+  const sid = process.env.CDB_SERVICE_CONSUMER_ID || '1';
+
+  // 日付形式を YYYY-MM-DD に統一（HH:mm:ss が不要な可能性があるため）
+  const since = startDate.split(' ')[0];
+  const until = endDate.split(' ')[0];
+
   const response = await axios.get('https://api-2.omni-databank.com/behaviors/phone/calls', {
-    params: { since: startDate, until: endDate },
+    params: { since, until },
     headers: {
-      'Authorization': `Bearer ${token}`
+      'Authorization': `Bearer ${token}`,
+      'ServiceConsumerID': sid
     }
   });
 
