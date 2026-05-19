@@ -33,9 +33,13 @@ export async function runAutoAnalysis() {
   try {
     // 1. CDBから前日分のログを取得
     const token = await getCdbAuthToken();
+    const now = new Date();
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
     const dateStr = yesterday.toISOString().split('T')[0]; // YYYY-MM-DD
+    
+    console.log(`[DEBUG] Current time (UTC): ${now.toISOString()}`);
+    console.log(`[DEBUG] Calculated dateStr (yesterday UTC): ${dateStr}`);
     
     // 取得範囲（前日の0:00:00〜23:59:59）
     const startDate = `${dateStr} 00:00:00`;
