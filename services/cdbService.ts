@@ -49,9 +49,13 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
 
     console.log('--- [DEBUG] CDB /me response successfully retrieved ---');
     
+    const embedded = meResponse.data?._embedded || {};
+    const belongsList = embedded.belongs || meResponse.data?.belongs || [];
+    const accountsList = embedded.accounts || meResponse.data?.accounts || [];
+
     // belongs（所属アカウント）のパース
-    if (meResponse.data.belongs && Array.isArray(meResponse.data.belongs)) {
-      for (const b of meResponse.data.belongs) {
+    if (Array.isArray(belongsList)) {
+      for (const b of belongsList) {
         if (b.accountId) {
           uniqueAccounts.set(Number(b.accountId), b.label || `Account ${b.accountId}`);
         }
@@ -59,8 +63,8 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
     }
 
     // accounts（管理アカウント）のパース
-    if (meResponse.data.accounts && Array.isArray(meResponse.data.accounts)) {
-      for (const a of meResponse.data.accounts) {
+    if (Array.isArray(accountsList)) {
+      for (const a of accountsList) {
         if (a.accountId) {
           uniqueAccounts.set(Number(a.accountId), a.label || `Account ${a.accountId}`);
         }
@@ -79,39 +83,10 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
 
   const allCallLogs: CdbCallLog[] = [];
 
-  // アカウント情報が取得できなかった場合のフォールバック（従来通りアカウントID指定なしで1回リクエスト）
+  // アカウント情報が取得できなかった場合のフォールバック（accountIdが必須のためリクエストは行わずログを出力します）
   if (uniqueAccounts.size === 0) {
-    console.log(`--- [DEBUG] Requesting CDB logs without accountId: since=${since}, until=${until}, sid=${sid} ---`);
-    try {
-      const response = await axios.get('https://api-2.omni-databank.com/behaviors/phone/calls', {
-        params: { since, until },
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'ServiceConsumerID': sid
-        }
-      });
-      const logs = response.data._embedded?.calls || response.data || [];
-      if (Array.isArray(logs)) {
-        for (const log of logs) {
-          allCallLogs.push({
-            account_name: log.account_name || '不明なアカウント',
-            campaign_name: log.campaign_name || '',
-            call_at: log.call_at || '',
-            observation_point_name: log.observation_point_name || '',
-            duration: log.duration || 0,
-            caller_number: log.caller_number || '',
-            media_number: log.media_number || '',
-            termination_reason: log.termination_reason || '',
-            audio_url: log.audio_url || ''
-          });
-        }
-      }
-    } catch (error: any) {
-      console.error('--- [DEBUG] CDB API Error (Fallback) ---');
-      console.error(error.response?.data || error.message);
-      throw error;
-    }
-    return allCallLogs;
+    console.warn('--- [WARNING] No accounts detected from /me endpoint. Proceeding with retrieval is not possible because accountId is required to fetch call logs. ---');
+    return [];
   }
 
   // 2. 収集した各アカウントごとにクエリパラメータにて accountId を指定して入電ログを取得
