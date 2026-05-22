@@ -77,9 +77,9 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
     console.error(meError.response?.data || meError.message);
   }
 
-  // 日付形式を YYYY-MM-DD に統一（HH:mm:ss が不要な可能性があるため）
-  const since = startDate.split(' ')[0];
-  const until = endDate.split(' ')[0];
+  // CDB API は通常、HH:mm:ss を含む日時形式 (YYYY-MM-DD HH:mm:ss) を期待するため、元の値をそのまま使います。
+  const since = startDate;
+  const until = endDate;
 
   const allCallLogs: CdbCallLog[] = [];
 
@@ -89,12 +89,17 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
     return [];
   }
 
-  // 2. 収集した各アカウントごとにクエリパラメータにて accountId を指定して入電ログを取得
+  // 2. 収集した各アカウントごとにクエリパラメータにて accountId / account_id を指定して入電ログを取得
   for (const [accountId, accountName] of uniqueAccounts.entries()) {
     console.log(`--- [DEBUG] Requesting CDB logs: accountId=${accountId} (${accountName}), since=${since}, until=${until}, sid=${sid} ---`);
     try {
       const response = await axios.get('https://api-2.omni-databank.com/behaviors/phone/calls', {
-        params: { since, until, accountId },
+        params: { 
+          since, 
+          until, 
+          accountId: Number(accountId),
+          account_id: Number(accountId) // キャメルケースとスネークケースの両パラメータをサポートするため並行して指定
+        },
         headers: {
           'Authorization': `Bearer ${token}`,
           'ServiceConsumerID': sid
@@ -121,6 +126,10 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
       }
     } catch (error: any) {
       console.error(`--- [DEBUG] CDB API Error for Account ${accountName} (ID: ${accountId}) ---`);
+      if (error.config) {
+        console.error('Request URL:', error.config.url);
+        console.error('Request Params:', JSON.stringify(error.config.params));
+      }
       if (error.response) {
         console.error('Status:', error.response.status);
         console.error('Data:', JSON.stringify(error.response.data, null, 2));
