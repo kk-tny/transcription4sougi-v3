@@ -1,6 +1,7 @@
 import axios from 'axios';
 
 export interface CdbCallLog {
+  call_id: string;
   account_name: string;
   campaign_name: string;
   call_at: string;
@@ -117,6 +118,7 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
       if (Array.isArray(logs)) {
         for (const log of logs) {
           allCallLogs.push({
+            call_id: log.callId || log.call_id || '',
             account_name: accountName,
             campaign_name: campaignName,
             call_at: log.calledAt || log.called_at || log.call_at || '',
