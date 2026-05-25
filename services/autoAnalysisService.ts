@@ -52,79 +52,101 @@ export async function runAutoAnalysis() {
     // 本日のJST 00:00:00日時のインスタンスを作成
     const todayJst = new Date(`${yearStr}-${monthStr}-${dayStr}T00:00:00+09:00`);
     
-    // 本日から12時間差し引いて、確実にJST「前日」の日中の時刻を取得
-    const yesterdayMiddayJst = new Date(todayJst.getTime() - 12 * 60 * 60 * 1000);
-    const yesterdayParts = tokyoFormatter.formatToParts(yesterdayMiddayJst);
+    // 本日から24時間（1日）差し引いて、確実にJST「前日（昨日）」の日付を取得
+    const yesterdayJst = new Date(todayJst.getTime() - 24 * 60 * 60 * 1000);
+    const yesterdayParts = tokyoFormatter.formatToParts(yesterdayJst);
     const yYear = yesterdayParts.find(p => p.type === 'year')?.value || '';
     const yMonth = yesterdayParts.find(p => p.type === 'month')?.value || '';
     const yDay = yesterdayParts.find(p => p.type === 'day')?.value || '';
+    
     const dateStr = `${yYear}-${yMonth}-${yDay}`; // YYYY-MM-DD (JST昨日)
     
     console.log(`[DEBUG] Current UTC Time: ${now.toISOString()}`);
     console.log(`[DEBUG] Current JST Date: ${yearStr}-${monthStr}-${dayStr}`);
     console.log(`[DEBUG] Calculated dateStr (yesterday JST): ${dateStr}`);
     
-    // 取得範囲（前日の0:00:00〜23:59:59）
     const startDate = `${dateStr} 00:00:00`;
     const endDate = `${dateStr} 23:59:59`;
     
     console.log(`Fetching logs from ${startDate} to ${endDate}...`);
     const logs = await getCallLogs(token, startDate, endDate);
-    console.log(`Found ${logs.length} logs.`);
-
-    if (logs.length === 0) {
-      console.log("No logs to process.");
-      return;
-    }
+    console.log(`Found ${logs.length} logs in CDB API.`);
 
     const sheets = getSheetsClient();
     const spreadsheetId = process.env.AUTO_ANALYSIS_SPREADSHEET_ID || process.env.SPREADSHEET_ID;
 
-    for (const log of logs) {
-      try {
-        console.log(`Processing log for ${log.call_at}...`);
-        
-        // 2. 音声を解析
-        let analysis: any = null;
-        if (log.audio_url) {
-          const audio = await fetchAudioAsBase64(log.audio_url);
-          analysis = await analyzeAudioServer(audio);
+    // 重複防止：既存のコールID（15列目：O列）をシートから読み出す
+    let existingCallIds = new Set<string>();
+    try {
+      const existingResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: "シート1!O:O",
+      });
+      const rows = existingResponse.data.values || [];
+      for (const row of rows) {
+        if (row[0]) {
+          existingCallIds.add(String(row[0]).trim());
         }
-
-        // 3. スプレッドシートに書き込み
-        const values = [[
-          log.account_name || "",
-          log.campaign_name || "",
-          log.call_at || "",
-          log.observation_point_name || "",
-          log.duration || 0,
-          log.caller_number || "",
-          log.media_number || "",
-          log.termination_reason || "",
-          log.audio_url || "",
-          analysis?.callerName || "解析不能",
-          analysis?.subjectName || "解析不能",
-          analysis?.responderNames?.join('　→　') || "解析不能",
-          analysis?.inquiryType || "解析不能",
-          analysis?.details?.join('\n') || "解析不能"
-        ]];
-
-        await sheets.spreadsheets.values.append({
-          spreadsheetId,
-          range: "シート1!A:N", // シート名や範囲は必要に応じて調整
-          valueInputOption: "RAW",
-          requestBody: { values },
-        });
-
-        successCount++;
-        console.log("Successfully processed and saved.");
-      } catch (err) {
-        console.error(`Error processing log:`, err);
-        errorCount++;
       }
+      console.log(`--- [DEBUG] Fetched ${existingCallIds.size} existing call IDs from Sheet ---`);
+    } catch (sheetError: any) {
+      console.warn("--- [WARNING] Could not fetch existing call IDs. Assuming empty. ---", sheetError.message);
     }
 
-    // 4. Chatwork通知
+    // 新しい（未処理の）ログのみにフィルタ
+    const unprocessedLogs = logs.filter(log => log.call_id && !existingCallIds.has(log.call_id));
+    console.log(`Unprocessed logs to analyze: ${unprocessedLogs.length} (out of ${logs.length} found)`);
+
+    if (unprocessedLogs.length > 0) {
+      for (const log of unprocessedLogs) {
+        try {
+          console.log(`Processing log for ${log.call_at}...`);
+          
+          // 2. 音声を解析
+          let analysis: any = null;
+          if (log.audio_url) {
+            const audio = await fetchAudioAsBase64(log.audio_url);
+            analysis = await analyzeAudioServer(audio);
+          }
+
+          // 3. スプレッドシートに書き込み (O列にコールIDも格納)
+          const values = [[
+            log.account_name || "",
+            log.campaign_name || "",
+            log.call_at || "",
+            log.observation_point_name || "",
+            log.duration || 0,
+            log.caller_number || "",
+            log.media_number || "",
+            log.termination_reason || "",
+            log.audio_url || "",
+            analysis?.callerName || "解析不能",
+            analysis?.subjectName || "解析不能",
+            analysis?.responderNames?.join('　→　') || "解析不能",
+            analysis?.inquiryType || "解析不能",
+            analysis?.details?.join('\n') || "解析不能",
+            log.call_id || ""
+          ]];
+
+          await sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: "シート1!A:O", // A〜O列に拡張
+            valueInputOption: "RAW",
+            requestBody: { values },
+          });
+
+          successCount++;
+          console.log("Successfully processed and saved.");
+        } catch (err) {
+          console.error(`Error processing log:`, err);
+          errorCount++;
+        }
+      }
+    } else {
+      console.log("No new logs to process today. Skipping extraction loop.");
+    }
+
+    // 4. Chatwork通知 (件数が0件でも完了状況を知らせるために必ず送信)
     await sendChatworkNotification(successCount, errorCount);
     console.log("Auto Analysis task finished.");
 
