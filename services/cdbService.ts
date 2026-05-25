@@ -37,8 +37,21 @@ export async function getCdbAuthToken(): Promise<string> {
 export async function getCallLogs(token: string, startDate: string, endDate: string): Promise<CdbCallLog[]> {
   const sid = process.env.CDB_SERVICE_CONSUMER_ID || '1';
 
+  // Parser that converts "YYYY-MM-DD HH:mm:ss" in JST to a Unix timestamp in seconds
+  const parseJstToUnixSeconds = (dateStr: string): string => {
+    // Replace spaces with 'T' to create valid Date parse format
+    const formatted = dateStr.trim().replace(/\s+/, 'T');
+    const isoString = formatted.includes('+') ? formatted : `${formatted}+09:00`;
+    return String(Math.floor(new Date(isoString).getTime() / 1000));
+  };
+
+  const beginTimestamp = parseJstToUnixSeconds(startDate);
+  const endTimestamp = parseJstToUnixSeconds(endDate);
+
   // 1. /me エンドポイントから所属・管理しているアカウント情報一覧を動的に取得
   let uniqueAccounts = new Map<number, string>();
+  let campaignsList: any[] = [];
+
   try {
     const meResponse = await axios.get('https://api-2.omni-databank.com/me', {
       headers: {
@@ -50,17 +63,8 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
     console.log('--- [DEBUG] CDB /me response successfully retrieved ---');
     
     const embedded = meResponse.data?._embedded || {};
-    const belongsList = embedded.belongs || meResponse.data?.belongs || [];
     const accountsList = embedded.accounts || meResponse.data?.accounts || [];
-
-    // belongs（所属アカウント）のパース
-    if (Array.isArray(belongsList)) {
-      for (const b of belongsList) {
-        if (b.accountId) {
-          uniqueAccounts.set(Number(b.accountId), b.label || `Account ${b.accountId}`);
-        }
-      }
-    }
+    campaignsList = embedded.campaigns || meResponse.data?.campaigns || [];
 
     // accounts（管理アカウント）のパース
     if (Array.isArray(accountsList)) {
@@ -71,34 +75,35 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
       }
     }
 
-    console.log(`[DEBUG] Detected accounts size: ${uniqueAccounts.size}`);
+    console.log(`[DEBUG] Detected accounts size: ${uniqueAccounts.size}, campaigns size: ${campaignsList.length}`);
   } catch (meError: any) {
-    console.error('--- [DEBUG] Failed to get /me info. Fallback to default behavior constraint. ---');
+    console.error('--- [DEBUG] Failed to get /me info. ---');
     console.error(meError.response?.data || meError.message);
   }
 
-  // CDB API は通常、HH:mm:ss を含む日時形式 (YYYY-MM-DD HH:mm:ss) を期待するため、元の値をそのまま使います。
-  const since = startDate;
-  const until = endDate;
-
   const allCallLogs: CdbCallLog[] = [];
 
-  // アカウント情報が取得できなかった場合のフォールバック（accountIdが必須のためリクエストは行わずログを出力します）
-  if (uniqueAccounts.size === 0) {
-    console.warn('--- [WARNING] No accounts detected from /me endpoint. Proceeding with retrieval is not possible because accountId is required to fetch call logs. ---');
+  // キャンペーン情報が取得できなかった場合
+  if (campaignsList.length === 0) {
+    console.warn('--- [WARNING] No campaigns detected from /me endpoint. Querying is impossible. ---');
     return [];
   }
 
-  // 2. 収集した各アカウントごとにクエリパラメータにて accountId / account_id を指定して入電ログを取得
-  for (const [accountId, accountName] of uniqueAccounts.entries()) {
-    console.log(`--- [DEBUG] Requesting CDB logs: accountId=${accountId} (${accountName}), since=${since}, until=${until}, sid=${sid} ---`);
+  // 2. 各キャンペーンごとにクエリパラメータ（campaignId、beginTimestamp、endTimestamp）を指定して入電ログを取得
+  for (const campaign of campaignsList) {
+    const campaignId = campaign.campaignId;
+    if (!campaignId) continue;
+
+    const campaignName = campaign.label || `Campaign ${campaignId}`;
+    const accountName = uniqueAccounts.get(Number(campaign.accountId)) || `Account ${campaign.accountId}`;
+
+    console.log(`--- [DEBUG] Requesting CDB logs: Campaign=${campaignName} (ID=${campaignId}, Account=${accountName}), begin=${beginTimestamp}, end=${endTimestamp} ---`);
     try {
       const response = await axios.get('https://api-2.omni-databank.com/behaviors/phone/calls', {
         params: { 
-          since, 
-          until, 
-          accountId: Number(accountId),
-          account_id: Number(accountId) // キャメルケースとスネークケースの両パラメータをサポートするため並行して指定
+          campaignId: String(campaignId),
+          beginTimestamp, 
+          endTimestamp
         },
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -106,26 +111,26 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
         }
       });
 
-      console.log(`--- [DEBUG] CDB API response status for ${accountName}:`, response.status);
+      console.log(`--- [DEBUG] CDB API response status for Campaign ${campaignName}:`, response.status);
 
       const logs = response.data._embedded?.calls || response.data || [];
       if (Array.isArray(logs)) {
         for (const log of logs) {
           allCallLogs.push({
-            account_name: log.account_name || accountName, // ログ側になければmeから得られた名前を上書き/フォールバック
-            campaign_name: log.campaign_name || '',
-            call_at: log.call_at || '',
-            observation_point_name: log.observation_point_name || '',
-            duration: log.duration || 0,
-            caller_number: log.caller_number || '',
-            media_number: log.media_number || '',
-            termination_reason: log.termination_reason || '',
-            audio_url: log.audio_url || ''
+            account_name: accountName,
+            campaign_name: campaignName,
+            call_at: log.calledAt || log.called_at || log.call_at || '',
+            observation_point_name: log.observerLabel || log.observer_label || log.observation_point_name || '',
+            duration: log.callDuration || log.call_duration || log.duration || 0,
+            caller_number: log.callerPhoneNumber || log.caller_phone_number || log.caller_number || '',
+            media_number: log.trackingPhoneNumber || log.tracking_phone_number || log.media_number || '',
+            termination_reason: log.hangupCode !== undefined ? String(log.hangupCode) : log.termination_reason || '',
+            audio_url: log.recordedAudioUrl || log.recorded_audio_url || log.audio_url || ''
           });
         }
       }
     } catch (error: any) {
-      console.error(`--- [DEBUG] CDB API Error for Account ${accountName} (ID: ${accountId}) ---`);
+      console.error(`--- [DEBUG] CDB API Error for Campaign ${campaignName} (ID: ${campaignId}) ---`);
       if (error.config) {
         console.error('Request URL:', error.config.url);
         console.error('Request Params:', JSON.stringify(error.config.params));
@@ -136,10 +141,9 @@ export async function getCallLogs(token: string, startDate: string, endDate: str
       } else {
         console.error('Message:', error.message);
       }
-      // 他のアカウントで通話ログが正常に取れる可能性を考慮し、エラーが発生してもスキップして続行します。
     }
   }
 
-  console.log(`--- [DEBUG] All accounts processing completed. Total combined call logs: ${allCallLogs.length} ---`);
+  console.log(`--- [DEBUG] All campaigns processing completed. Total combined call logs: ${allCallLogs.length} ---`);
   return allCallLogs;
 }
