@@ -34,12 +34,35 @@ export async function runAutoAnalysis() {
     // 1. CDBから前日分のログを取得
     const token = await getCdbAuthToken();
     const now = new Date();
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const dateStr = yesterday.toISOString().split('T')[0]; // YYYY-MM-DD
     
-    console.log(`[DEBUG] Current time (UTC): ${now.toISOString()}`);
-    console.log(`[DEBUG] Calculated dateStr (yesterday UTC): ${dateStr}`);
+    // Asia/Tokyo タイムゾーンで現在の日付をロバストに取得するフォーマッタ
+    const tokyoFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    
+    // 本日のJST日付を取得する
+    const tokyoParts = tokyoFormatter.formatToParts(now);
+    const yearStr = tokyoParts.find(p => p.type === 'year')?.value || '';
+    const monthStr = tokyoParts.find(p => p.type === 'month')?.value || '';
+    const dayStr = tokyoParts.find(p => p.type === 'day')?.value || '';
+    
+    // 本日のJST 00:00:00日時のインスタンスを作成
+    const todayJst = new Date(`${yearStr}-${monthStr}-${dayStr}T00:00:00+09:00`);
+    
+    // 本日から12時間差し引いて、確実にJST「前日」の日中の時刻を取得
+    const yesterdayMiddayJst = new Date(todayJst.getTime() - 12 * 60 * 60 * 1000);
+    const yesterdayParts = tokyoFormatter.formatToParts(yesterdayMiddayJst);
+    const yYear = yesterdayParts.find(p => p.type === 'year')?.value || '';
+    const yMonth = yesterdayParts.find(p => p.type === 'month')?.value || '';
+    const yDay = yesterdayParts.find(p => p.type === 'day')?.value || '';
+    const dateStr = `${yYear}-${yMonth}-${yDay}`; // YYYY-MM-DD (JST昨日)
+    
+    console.log(`[DEBUG] Current UTC Time: ${now.toISOString()}`);
+    console.log(`[DEBUG] Current JST Date: ${yearStr}-${monthStr}-${dayStr}`);
+    console.log(`[DEBUG] Calculated dateStr (yesterday JST): ${dateStr}`);
     
     // 取得範囲（前日の0:00:00〜23:59:59）
     const startDate = `${dateStr} 00:00:00`;
