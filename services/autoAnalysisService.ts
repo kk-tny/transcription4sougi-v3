@@ -25,6 +25,23 @@ async function fetchAudioAsBase64(url: string): Promise<{ data: string, mimeType
   };
 }
 
+// 外部APIやGoogleスプレッドシートAPIなどエラーが起きやすい処理のリトライフ処理用のヘルパー
+async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 2000): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (error) {
+      attempt++;
+      if (attempt >= maxRetries) {
+        throw error;
+      }
+      console.warn(`[WARNING] Attempt ${attempt} failed, retrying in ${delayMs}ms... Error:`, error);
+      await new Promise(resolve => setTimeout(resolve, delayMs * Math.pow(2, attempt - 1)));
+    }
+  }
+}
+
 export async function runAutoAnalysis() {
   console.log("Starting Auto Analysis task...");
   let successCount = 0;
@@ -78,10 +95,10 @@ export async function runAutoAnalysis() {
     // 重複防止：既存のコールID（15列目：O列）をシートから読み出す
     let existingCallIds = new Set<string>();
     try {
-      const existingResponse = await sheets.spreadsheets.values.get({
+      const existingResponse = await withRetry(() => sheets.spreadsheets.values.get({
         spreadsheetId,
         range: "シート1!O:O",
-      });
+      }));
       const rows = existingResponse.data.values || [];
       for (const row of rows) {
         if (row[0]) {
@@ -98,6 +115,7 @@ export async function runAutoAnalysis() {
     console.log(`Unprocessed logs to analyze: ${unprocessedLogs.length} (out of ${logs.length} found)`);
 
     if (unprocessedLogs.length > 0) {
+      const successRows: any[][] = [];
       for (const log of unprocessedLogs) {
         try {
           console.log(`Processing log for ${log.call_at}...`);
@@ -109,8 +127,8 @@ export async function runAutoAnalysis() {
             analysis = await analyzeAudioServer(audio);
           }
 
-          // 3. スプレッドシートに書き込み (O列にコールIDも格納)
-          const values = [[
+          // 3. スプレッドシート用の値を準備して蓄積
+          const rowValues = [
             log.account_name || "",
             log.campaign_name || "",
             log.call_at || "",
@@ -126,20 +144,32 @@ export async function runAutoAnalysis() {
             analysis?.inquiryType || "解析不能",
             analysis?.details?.join('\n') || "解析不能",
             log.call_id || ""
-          ]];
-
-          await sheets.spreadsheets.values.append({
-            spreadsheetId,
-            range: "シート1!A:O", // A〜O列に拡張
-            valueInputOption: "RAW",
-            requestBody: { values },
-          });
-
+          ];
+          successRows.push(rowValues);
           successCount++;
-          console.log("Successfully processed and saved.");
+          console.log("Successfully analyzed log (buffered for append).");
         } catch (err) {
           console.error(`Error processing log:`, err);
           errorCount++;
+        }
+      }
+
+      // すべての正常終了した行を一括で書き込み
+      if (successRows.length > 0) {
+        console.log(`Appending ${successRows.length} rows to spreadsheet in batch...`);
+        try {
+          await withRetry(() => sheets.spreadsheets.values.append({
+            spreadsheetId,
+            range: "シート1!A:O",
+            valueInputOption: "RAW",
+            requestBody: { values: successRows },
+          }));
+          console.log("Batch append to spreadsheet completed successfully.");
+        } catch (batchError) {
+          console.error("Critical error: failed to batch append rows to spreadsheet:", batchError);
+          // もしバッチ全体が失敗した場合は、エラー行数としてすべてを計上する
+          errorCount += successRows.length;
+          successCount -= successRows.length;
         }
       }
     } else {
