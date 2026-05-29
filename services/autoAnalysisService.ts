@@ -115,7 +115,6 @@ export async function runAutoAnalysis() {
     console.log(`Unprocessed logs to analyze: ${unprocessedLogs.length} (out of ${logs.length} found)`);
 
     if (unprocessedLogs.length > 0) {
-      const successRows: any[][] = [];
       for (const log of unprocessedLogs) {
         try {
           console.log(`Processing log for ${log.call_at}...`);
@@ -127,7 +126,7 @@ export async function runAutoAnalysis() {
             analysis = await analyzeAudioServer(audio);
           }
 
-          // 3. スプレッドシート用の値を準備して蓄積
+          // 3. スプレッドシート用の値を準備
           const rowValues = [
             log.account_name || "",
             log.campaign_name || "",
@@ -145,31 +144,22 @@ export async function runAutoAnalysis() {
             analysis?.details?.join('\n') || "解析不能",
             log.call_id || ""
           ];
-          successRows.push(rowValues);
-          successCount++;
-          console.log("Successfully analyzed log (buffered for append).");
-        } catch (err) {
-          console.error(`Error processing log:`, err);
-          errorCount++;
-        }
-      }
 
-      // すべての正常終了した行を一括で書き込み
-      if (successRows.length > 0) {
-        console.log(`Appending ${successRows.length} rows to spreadsheet in batch...`);
-        try {
+          // 各ログの完了ごとにスプレッドシートへの即時書き込みを行います
+          // これにより、たとえ実行タイムアウト等が発生しても処理が完了したログは確実に保存され、
+          // 次回実行時には重複確認（existingCallIds）によって二重の処理を防ぐことができます。
           await withRetry(() => sheets.spreadsheets.values.append({
             spreadsheetId,
             range: "シート1!A:O",
             valueInputOption: "RAW",
-            requestBody: { values: successRows },
+            requestBody: { values: [rowValues] },
           }));
-          console.log("Batch append to spreadsheet completed successfully.");
-        } catch (batchError) {
-          console.error("Critical error: failed to batch append rows to spreadsheet:", batchError);
-          // もしバッチ全体が失敗した場合は、エラー行数としてすべてを計上する
-          errorCount += successRows.length;
-          successCount -= successRows.length;
+
+          successCount++;
+          console.log(`Successfully processed and saved call ${log.call_id} to Sheet.`);
+        } catch (err) {
+          console.error(`Error processing log:`, err);
+          errorCount++;
         }
       }
     } else {
