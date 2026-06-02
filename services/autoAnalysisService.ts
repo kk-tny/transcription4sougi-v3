@@ -25,6 +25,29 @@ async function fetchAudioAsBase64(url: string): Promise<{ data: string, mimeType
   };
 }
 
+function formatCallAtToJst(callAtStr: string): string {
+  if (!callAtStr) return "";
+  try {
+    const d = new Date(callAtStr);
+    if (isNaN(d.getTime())) return callAtStr;
+    
+    // 時差(JST = UTC + 9)を考慮してミリ秒を計算し、コンテナ（UTC環境など）に関わらず確実にJST時間基準で取得します
+    const jstOffset = 9 * 60 * 60 * 1000;
+    const jstTime = new Date(d.getTime() + jstOffset);
+    
+    const year = jstTime.getUTCFullYear();
+    const month = String(jstTime.getUTCMonth() + 1).padStart(2, '0');
+    const day = String(jstTime.getUTCDate()).padStart(2, '0');
+    const hour = String(jstTime.getUTCHours()).padStart(2, '0');
+    const minute = String(jstTime.getUTCMinutes()).padStart(2, '0');
+    const second = String(jstTime.getUTCSeconds()).padStart(2, '0');
+    
+    return `${year}/${month}/${day} ${hour}:${minute}:${second}`;
+  } catch (e) {
+    return callAtStr;
+  }
+}
+
 // 外部APIやGoogleスプレッドシートAPIなどエラーが起きやすい処理のリトライフ処理用のヘルパー
 async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 2000): Promise<T> {
   let attempt = 0;
@@ -130,7 +153,7 @@ export async function runAutoAnalysis() {
           const rowValues = [
             log.account_name || "",
             log.campaign_name || "",
-            log.call_at || "",
+            formatCallAtToJst(log.call_at || ""),
             log.observation_point_name || "",
             log.duration || 0,
             log.caller_number || "",
