@@ -65,6 +65,43 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 2000
   }
 }
 
+async function fetchStaffListMap(): Promise<Map<string, string[]>> {
+  const staffMap = new Map<string, string[]>();
+  try {
+    console.log("Fetching staff list map from Sheet 'アカウントとスタッフ'...");
+    const sheets = getSheetsClient();
+    const spreadsheetId = process.env.AUTO_ANALYSIS_SPREADSHEET_ID || process.env.SPREADSHEET_ID;
+    
+    // スプレッドシートから「アカウントとスタッフ」のデータを取得
+    const response = await withRetry(() => sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: "アカウントとスタッフ!A:B",
+    }));
+    
+    const rows = response.data.values || [];
+    if (rows.length > 1) {
+      for (let i = 1; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || row.length < 2) continue;
+        const accountName = String(row[0]).trim();
+        const staffName = String(row[1]).trim();
+        if (accountName && staffName) {
+          if (!staffMap.has(accountName)) {
+            staffMap.set(accountName, []);
+          }
+          staffMap.get(accountName)!.push(staffName);
+        }
+      }
+      console.log(`[DEBUG] Successfully loaded staff lists for ${staffMap.size} accounts.`);
+    } else {
+      console.log("[DEBUG] Sheet 'アカウントとスタッフ' is empty or only contains header.");
+    }
+  } catch (error: any) {
+    console.warn("--- [WARNING] Failed to load staff list. Proceeding with generic fallback analysis. ---", error.message);
+  }
+  return staffMap;
+}
+
 export async function runAutoAnalysis() {
   console.log("Starting Auto Analysis task...");
   let successCount = 0;
@@ -137,6 +174,9 @@ export async function runAutoAnalysis() {
     const unprocessedLogs = logs.filter(log => log.call_id && !existingCallIds.has(log.call_id));
     console.log(`Unprocessed logs to analyze: ${unprocessedLogs.length} (out of ${logs.length} found)`);
 
+    // アカウントごとのスタッフ名簿をロード
+    const staffMap = unprocessedLogs.length > 0 ? await fetchStaffListMap() : new Map<string, string[]>();
+
     if (unprocessedLogs.length > 0) {
       for (const log of unprocessedLogs) {
         try {
@@ -146,7 +186,14 @@ export async function runAutoAnalysis() {
           let analysis: any = null;
           if (log.audio_url) {
             const audio = await fetchAudioAsBase64(log.audio_url);
-            analysis = await analyzeAudioServer(audio);
+            const accountName = log.account_name || "";
+            const staffList = staffMap.get(accountName) || [];
+            if (staffList.length > 0) {
+              console.log(`[DEBUG] Staff list found for account "${accountName}":`, staffList);
+            } else {
+              console.log(`[DEBUG] No staff list registered for account "${accountName}". Using generic rules.`);
+            }
+            analysis = await analyzeAudioServer(audio, staffList);
           }
 
           // 3. スプレッドシート用の値を準備
