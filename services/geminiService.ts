@@ -1,9 +1,16 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { TranscriptionResult } from '../types.ts';
 
+export interface CustomMaster {
+  category: string;
+  formalName: string;
+  reading: string;
+}
+
 export async function analyzeAudioServer(
   audioData: { mimeType: string; data: string },
-  staffList?: string[]
+  staffList?: string[],
+  customMasters?: CustomMaster[]
 ): Promise<TranscriptionResult> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
@@ -23,6 +30,25 @@ export async function analyzeAudioServer(
 4. 音声内でスタッフが名前を一切名乗らなかったため名前が分からない場合は、必ず「不明（名乗らず）」という固定の文字列を出力してください（「ふめい（なのらず）」などの表記揺れは禁止です）。`;
   }
 
+  let customMasterInstruction = "";
+  if (customMasters && customMasters.length > 0) {
+    const listStr = customMasters
+      .map(m => `- 【${m.category}】正式名称: 『${m.formalName}』 (読み: ${m.reading})`)
+      .join("\n");
+      
+    customMasterInstruction = `
+
+【特定固有名詞（会館名・火葬場名・社名・屋号等）の補正ルール】
+この通話のアカウントに関連する固有名詞（会館名、火葬場名、社名・屋号など）の最新のマスターリストは以下の通りです：
+${listStr}
+
+通話内容の「文字起こし」や「具体的な内容」を生成・抽出する際は、必ず以下の基準に従って音声の表記や誤変換を正しく補正してください：
+1. 聞き取れた発音（音声）がマスターリスト内のいずれかの「読み」に酷似している、または文脈上、明らかに特定の会館名や火葬場名、社名・屋号を指していると判断できる場合、表記揺れや誤変換（文字起こしのバグなど）を防ぐため、必ず対応する「正式名称」を最優先で適用し、正確に出力してください。
+   （例：読みが「さくらぎさいじょう」に近い、またはそう聞こえた場合、文字起こしや内容要約には必ず「市民葬祭 桜木斎場」と正確に記載してください）
+2. 漢字の難しい会館名、火葬場名、社名・屋号等についても、上記マスターリスト内の「正式名称（漢字表記）」をそのまま正確に適用し、文字起こしの誤字・脱字を防止してください。
+3. もしマスターリストの「読み」と、音声で呼ばれている名称の響きがほぼ同じである場合、文字起こしの自動認識による偶発的な誤変換を避け、マスターリストの正式な漢字/表記へと変換して出力してください。`;
+  }
+
   const ai = new GoogleGenAI({ apiKey });
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
@@ -36,7 +62,7 @@ export async function analyzeAudioServer(
       }
     ],
     config: {
-      systemInstruction: `あなたは葬儀社の熟練事務スタッフです。葬儀社宛の電話内容を正確に解析し、以下の項目を抽出してください。
+      systemInstruction: `あなたは葬儀社の熟練事務スタッフです。葬儀社宛 of 電話内容を正確に解析し、以下の項目を抽出してください。
 
 1. ご相談者様名: 電話をしてきた人の名前。必ず「ひらがな」で抽出してください。不明な場合は「不明」としてください。
 2. ご対象者様名: 亡くなられた方の名前。必ず「ひらがな」で抽出してください。不明な場合は「不明」としてください。
@@ -52,7 +78,7 @@ export async function analyzeAudioServer(
    - 間違い電話（葬儀社以外宛）: 葬儀社 / 葬儀式場 / 葬儀会館とは関係のない場所と間違えたもの
    - その他: 上記に該当しない内容のお問合せ
 5. 具体的な内容: 電話の内容を簡潔にまとめてください。出力形式は「・」で始まる箇書き（Array形式）とし、各要素の冒頭には必ず「・」を含めてください。
-6. 文字起こし: 全ての会話を話者ごとに正確に記録してください。`,
+6. 文字起こし: 全ての会話を話者ごとに正確に記録してください。${customMasterInstruction}`,
       responseMimeType: "application/json",
       responseSchema: {
         type: Type.OBJECT,
