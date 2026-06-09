@@ -1,7 +1,7 @@
 import { google } from "googleapis";
 import axios from "axios";
 import { getCdbAuthToken, getCallLogs, CdbCallLog } from "./cdbService.ts";
-import { analyzeAudioServer } from "./geminiService.ts";
+import { analyzeAudioServer, CustomMaster } from "./geminiService.ts";
 import { sendChatworkNotification } from "./chatworkService.ts";
 
 // Google Sheets クライアントの初期化
@@ -65,41 +65,95 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 2000
   }
 }
 
-async function fetchStaffListMap(): Promise<Map<string, string[]>> {
+async function fetchMasterData(): Promise<{
+  staffMap: Map<string, string[]>;
+  customMasterMap: Map<string, CustomMaster[]>;
+}> {
   const staffMap = new Map<string, string[]>();
+  const customMasterMap = new Map<string, CustomMaster[]>();
+
   try {
-    console.log("Fetching staff list map from Sheet 'アカウントとスタッフ'...");
+    console.log("Fetching master data map (Staff & Names) from Sheet 'アカウントとスタッフ'...");
     const sheets = getSheetsClient();
     const spreadsheetId = process.env.AUTO_ANALYSIS_SPREADSHEET_ID || process.env.SPREADSHEET_ID;
     
-    // スプレッドシートから「アカウントとスタッフ」のデータを取得
+    // スプレッドシートから「アカウントとスタッフ」のデータをA列からD列まで広範囲で取得
     const response = await withRetry(() => sheets.spreadsheets.values.get({
       spreadsheetId,
-      range: "アカウントとスタッフ!A:B",
+      range: "アカウントとスタッフ!A:D",
     }));
     
     const rows = response.data.values || [];
     if (rows.length > 1) {
-      for (let i = 1; i < rows.length; i++) {
-        const row = rows[i];
-        if (!row || row.length < 2) continue;
-        const accountName = String(row[0]).trim();
-        const staffName = String(row[1]).trim();
-        if (accountName && staffName) {
-          if (!staffMap.has(accountName)) {
-            staffMap.set(accountName, []);
+      const headerRow = rows[0].map(h => String(h).trim());
+      // 分類カラムと読み方カラムが存在するかで新フォーマットかどうかを判定
+      const hasCategoryCol = headerRow.includes("分類");
+      const hasReadingCol = headerRow.includes("読み方（ひらがな）");
+      
+      if (hasCategoryCol && hasReadingCol) {
+        // 新フォーマット：アカウント名 / 分類 / 正式名称(漢字/英語) / 読み方(ひらがな)
+        console.log("[DEBUG] Detected NEW 4-column master data format in Google Sheet.");
+        
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || row.length < 2) continue;
+          
+          const accountName = String(row[0] || "").trim();
+          const category = String(row[1] || "").trim();
+          const formalName = String(row[2] || "").trim();
+          const reading = String(row[3] || "").trim();
+          
+          if (!accountName) continue;
+          
+          if (category === "スタッフ名") {
+            // スタッフ名の場合（読み方ひらがなをスタッフ名として採用）
+            const staffName = reading || formalName; // 基本は読み方のひらがなをマッピング
+            if (staffName) {
+              if (!staffMap.has(accountName)) {
+                staffMap.set(accountName, []);
+              }
+              staffMap.get(accountName)!.push(staffName);
+            }
+          } else {
+            // その他の分類（葬儀式場名、火葬場名、屋号など）
+            if (reading && formalName) {
+              if (!customMasterMap.has(accountName)) {
+                customMasterMap.set(accountName, []);
+              }
+              customMasterMap.get(accountName)!.push({
+                category,
+                formalName,
+                reading
+              });
+            }
           }
-          staffMap.get(accountName)!.push(staffName);
+        }
+      } else {
+        // 旧フォーマット：アカウント名 / スタッフ名 (2カラムのみ)
+        console.log("[DEBUG] Detected OLD 2-column master data format in Google Sheet. Doing fallback parsing.");
+        for (let i = 1; i < rows.length; i++) {
+          const row = rows[i];
+          if (!row || row.length < 2) continue;
+          const accountName = String(row[0] || "").trim();
+          const staffName = String(row[1] || "").trim();
+          if (accountName && staffName) {
+            if (!staffMap.has(accountName)) {
+              staffMap.set(accountName, []);
+            }
+            staffMap.get(accountName)!.push(staffName);
+          }
         }
       }
-      console.log(`[DEBUG] Successfully loaded staff lists for ${staffMap.size} accounts.`);
+      
+      console.log(`[DEBUG] Successfully loaded masters for ${staffMap.size} accounts (staff lists) and ${customMasterMap.size} accounts (custom masters).`);
     } else {
       console.log("[DEBUG] Sheet 'アカウントとスタッフ' is empty or only contains header.");
     }
   } catch (error: any) {
-    console.warn("--- [WARNING] Failed to load staff list. Proceeding with generic fallback analysis. ---", error.message);
+    console.warn("--- [WARNING] Failed to load staff/custom list. Proceeding with generic fallback analysis. ---", error.message);
   }
-  return staffMap;
+  
+  return { staffMap, customMasterMap };
 }
 
 export async function runAutoAnalysis() {
@@ -174,8 +228,10 @@ export async function runAutoAnalysis() {
     const unprocessedLogs = logs.filter(log => log.call_id && !existingCallIds.has(log.call_id));
     console.log(`Unprocessed logs to analyze: ${unprocessedLogs.length} (out of ${logs.length} found)`);
 
-    // アカウントごとのスタッフ名簿をロード
-    const staffMap = unprocessedLogs.length > 0 ? await fetchStaffListMap() : new Map<string, string[]>();
+    // アカウントごとのマスターデータをロード
+    const { staffMap, customMasterMap } = unprocessedLogs.length > 0 
+      ? await fetchMasterData() 
+      : { staffMap: new Map<string, string[]>(), customMasterMap: new Map<string, CustomMaster[]>() };
 
     if (unprocessedLogs.length > 0) {
       for (const log of unprocessedLogs) {
@@ -188,12 +244,17 @@ export async function runAutoAnalysis() {
             const audio = await fetchAudioAsBase64(log.audio_url);
             const accountName = log.account_name || "";
             const staffList = staffMap.get(accountName) || [];
-            if (staffList.length > 0) {
-              console.log(`[DEBUG] Staff list found for account "${accountName}":`, staffList);
+            const customMasters = customMasterMap.get(accountName) || [];
+            
+            if (staffList.length > 0 || customMasters.length > 0) {
+              console.log(`[DEBUG] Master data loaded for account "${accountName}":`, {
+                staffCount: staffList.length,
+                customMasterCount: customMasters.length
+              });
             } else {
-              console.log(`[DEBUG] No staff list registered for account "${accountName}". Using generic rules.`);
+              console.log(`[DEBUG] No custom master data registered for account "${accountName}". Using generic rules.`);
             }
-            analysis = await analyzeAudioServer(audio, staffList);
+            analysis = await analyzeAudioServer(audio, staffList, customMasters);
           }
 
           // 3. スプレッドシート用の値を準備
