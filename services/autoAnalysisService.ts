@@ -65,7 +65,7 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 2000
   }
 }
 
-async function fetchMasterData(): Promise<{
+export async function fetchMasterData(): Promise<{
   staffMap: Map<string, string[]>;
   customMasterMap: Map<string, CustomMaster[]>;
 }> {
