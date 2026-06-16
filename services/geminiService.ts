@@ -111,11 +111,14 @@ ${listStr}
 }
 
 // クライアントサイドでの互換性のために残す（既存のコードが fetch を使っている場合用）
-export async function transcribeAudio(audioData: { mimeType: string; data: string }): Promise<TranscriptionResult> {
+export async function transcribeAudio(
+  audioData: { mimeType: string; data: string },
+  accountName?: string
+): Promise<TranscriptionResult> {
   const response = await fetch('/api/analyze', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ audioData })
+    body: JSON.stringify({ audioData, accountName })
   });
 
   if (!response.ok) {
