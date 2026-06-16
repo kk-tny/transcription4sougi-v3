@@ -5,6 +5,7 @@ import axios from "axios";
 import { GoogleGenAI, Type } from "@google/genai";
 
 import { analyzeAudioServer } from "../services/geminiService.ts";
+import { fetchMasterData } from "../services/autoAnalysisService.ts";
 
 const app = express();
 
@@ -26,8 +27,25 @@ const getSheetsClient = () => {
 
 app.post("/api/analyze", async (req, res) => {
   try {
-    const { audioData } = req.body;
-    const result = await analyzeAudioServer(audioData);
+    const { audioData, accountName } = req.body;
+    let staffList: string[] = [];
+    let customMasters: any[] = [];
+
+    if (accountName) {
+      try {
+        const { staffMap, customMasterMap } = await fetchMasterData();
+        staffList = staffMap.get(accountName) || [];
+        customMasters = customMasterMap.get(accountName) || [];
+        console.log(`[DEBUG] Dynamic master loaded for user-driven analysis (Account: "${accountName}"):`, {
+          staffCount: staffList.length,
+          customMasterCount: customMasters.length
+        });
+      } catch (masterError: any) {
+        console.warn(`[WARNING] Failed to load master data for manual analysis (Account: "${accountName}"):`, masterError.message);
+      }
+    }
+
+    const result = await analyzeAudioServer(audioData, staffList, customMasters);
     res.json({ text: JSON.stringify(result) }); // フロントエンド側は text プロパティ内の JSON をパースする作りになっているため
   } catch (error: any) {
     console.error("Gemini Error:", error);
@@ -39,7 +57,7 @@ app.get("/api/sheets/data", async (req, res) => {
   try {
     const sheets = getSheetsClient();
     const spreadsheetId = process.env.SPREADSHEET_ID;
-    const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: "シート1!A4:G" });
+    const response = await sheets.spreadsheets.values.get({ spreadsheetId, range: "シート1!A4:H" });
     res.json({ values: response.data.values || [] });
   } catch (error: any) { res.status(500).json({ error: error.message }); }
 });
@@ -70,7 +88,7 @@ app.post("/api/sheets/update-row", async (req, res) => {
     const actualRow = rowIndex + 4;
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `シート1!B${actualRow}:F${actualRow}`,
+      range: `シート1!C${actualRow}:G${actualRow}`,
       valueInputOption: "RAW",
       requestBody: { values },
     });
