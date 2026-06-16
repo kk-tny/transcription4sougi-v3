@@ -246,7 +246,8 @@ export default function App() {
       let successCount = 0;
       for (let i = 0; i < values.length; i++) {
         const row = values[i];
-        const audioUrl = row[6]; // G列 (index 6)
+        const accountName = row[0] ? String(row[0]).trim() : '';
+        const audioUrl = row[7]; // H列 (index 7)
 
         if (!audioUrl || !audioUrl.startsWith('http')) {
           setBatchProgress(p => ({ ...p, current: i + 1, status: `行 ${i + 4}: URLが無効なためスキップします` }));
@@ -278,7 +279,7 @@ export default function App() {
             const base64 = await base64Promise;
 
             setBatchProgress(p => ({ ...p, status: `行 ${i + 4}: AI解析中...` }));
-            const analysis = await transcribeAudio({ mimeType: blob.type, data: base64 });
+            const analysis = await transcribeAudio({ mimeType: blob.type, data: base64 }, accountName);
 
             setBatchProgress(p => ({ ...p, status: `行 ${i + 4}: スプレッドシートに書き込み中...` }));
             
@@ -406,7 +407,7 @@ export default function App() {
             </div>
           ) : (
             <p className="text-xs text-emerald-600">
-              G列の音源URLを読み込み、解析結果をB〜F列に自動で書き込みます（4行目以降）。
+              H列の音源URLを読み込み、解析結果をC〜G列に自動で書き込みます（4行目以降）。
             </p>
           )}
         </section>
