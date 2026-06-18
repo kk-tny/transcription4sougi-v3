@@ -68,9 +68,12 @@ async function withRetry<T>(fn: () => Promise<T>, maxRetries = 3, delayMs = 2000
 export async function fetchMasterData(): Promise<{
   staffMap: Map<string, string[]>;
   customMasterMap: Map<string, CustomMaster[]>;
+  accountNames: string[];
 }> {
   const staffMap = new Map<string, string[]>();
   const customMasterMap = new Map<string, CustomMaster[]>();
+  const accountNames: string[] = [];
+  const accountSet = new Set<string>();
 
   try {
     console.log("Fetching master data map (Staff & Names) from Sheet 'アカウントとスタッフ'...");
@@ -96,14 +99,19 @@ export async function fetchMasterData(): Promise<{
         
         for (let i = 1; i < rows.length; i++) {
           const row = rows[i];
-          if (!row || row.length < 2) continue;
+          if (!row || row.length === 0) continue;
           
           const accountName = String(row[0] || "").trim();
+          if (!accountName) continue;
+
+          if (!accountSet.has(accountName)) {
+            accountSet.add(accountName);
+            accountNames.push(accountName);
+          }
+          
           const category = String(row[1] || "").trim();
           const formalName = String(row[2] || "").trim();
           const reading = String(row[3] || "").trim();
-          
-          if (!accountName) continue;
           
           if (category === "スタッフ名") {
             // スタッフ名の場合（読み方ひらがなをスタッフ名として採用）
@@ -135,8 +143,15 @@ export async function fetchMasterData(): Promise<{
           const row = rows[i];
           if (!row || row.length < 2) continue;
           const accountName = String(row[0] || "").trim();
+          if (!accountName) continue;
+
+          if (!accountSet.has(accountName)) {
+            accountSet.add(accountName);
+            accountNames.push(accountName);
+          }
+
           const staffName = String(row[1] || "").trim();
-          if (accountName && staffName) {
+          if (staffName) {
             if (!staffMap.has(accountName)) {
               staffMap.set(accountName, []);
             }
@@ -153,13 +168,25 @@ export async function fetchMasterData(): Promise<{
     console.warn("--- [WARNING] Failed to load staff/custom list. Proceeding with generic fallback analysis. ---", error.message);
   }
   
-  return { staffMap, customMasterMap };
+  return { staffMap, customMasterMap, accountNames };
 }
 
 export async function runAutoAnalysis() {
   console.log("Starting Auto Analysis task...");
   let successCount = 0;
   let errorCount = 0;
+
+  // アカウント毎の入電統計マップ(CDB全体) と 有効通話（解析成功で特定のお問い合わせ種別）のマップ
+  const incomingCountMap = new Map<string, number>();
+  const validCallCountMap = new Map<string, number>();
+
+  // 有効通話と判定するお問い合わせ種別
+  const TARGET_INQUIRIES = [
+    "訃報",
+    "事前相談",
+    "自身の事前相談",
+    "間違い電話（葬儀相談）"
+  ];
 
   try {
     // 1. CDBから前日分のログを取得
@@ -203,6 +230,14 @@ export async function runAutoAnalysis() {
     const logs = await getCallLogs(token, startDate, endDate);
     console.log(`Found ${logs.length} logs in CDB API.`);
 
+    // ログ内すべてのアカウントに対する「入電数(総入電数)」を集計
+    for (const log of logs) {
+      const accountName = (log.account_name || "").trim();
+      if (accountName) {
+        incomingCountMap.set(accountName, (incomingCountMap.get(accountName) || 0) + 1);
+      }
+    }
+
     const sheets = getSheetsClient();
     const spreadsheetId = process.env.AUTO_ANALYSIS_SPREADSHEET_ID || process.env.SPREADSHEET_ID;
 
@@ -229,9 +264,9 @@ export async function runAutoAnalysis() {
     console.log(`Unprocessed logs to analyze: ${unprocessedLogs.length} (out of ${logs.length} found)`);
 
     // アカウントごとのマスターデータをロード
-    const { staffMap, customMasterMap } = unprocessedLogs.length > 0 
+    const { staffMap, customMasterMap, accountNames } = (unprocessedLogs.length > 0 || logs.length > 0)
       ? await fetchMasterData() 
-      : { staffMap: new Map<string, string[]>(), customMasterMap: new Map<string, CustomMaster[]>() };
+      : { staffMap: new Map<string, string[]>(), customMasterMap: new Map<string, CustomMaster[]>(), accountNames: [] };
 
     if (unprocessedLogs.length > 0) {
       for (const log of unprocessedLogs) {
@@ -255,6 +290,17 @@ export async function runAutoAnalysis() {
               console.log(`[DEBUG] No custom master data registered for account "${accountName}". Using generic rules.`);
             }
             analysis = await analyzeAudioServer(audio, staffList, customMasters);
+          }
+
+          // 「有効通話数」の集計（解析成功しており、かつ特定のお問い合わせ種別である場合）
+          if (analysis) {
+            const inquiryType = (analysis.inquiryType || "").trim();
+            if (TARGET_INQUIRIES.includes(inquiryType)) {
+              const accountName = (log.account_name || "").trim();
+              if (accountName) {
+                validCallCountMap.set(accountName, (validCallCountMap.get(accountName) || 0) + 1);
+              }
+            }
           }
 
           // 3. スプレッドシート用の値を準備
@@ -297,8 +343,22 @@ export async function runAutoAnalysis() {
       console.log("No new logs to process today. Skipping extraction loop.");
     }
 
+    // アカウント毎の統計配列（details）をマスター設定順（accountNames）で構築
+    const details = accountNames.map(name => {
+      return {
+        accountName: name,
+        incomingCount: incomingCountMap.get(name) || 0,
+        validCount: validCallCountMap.get(name) || 0
+      };
+    });
+
+    const displayDateJst = dateStr.replace(/-/g, "/"); // YYYY/MM/DD 形式
+
     // 4. Chatwork通知 (件数が0件でも完了状況を知らせるために必ず送信)
-    await sendChatworkNotification(successCount, errorCount);
+    await sendChatworkNotification(successCount, errorCount, {
+      dateStr: displayDateJst,
+      details
+    });
     console.log("Auto Analysis task finished.");
 
   } catch (error) {
