@@ -273,9 +273,21 @@ export async function runAutoAnalysis() {
         try {
           console.log(`Processing log for ${log.call_at}...`);
           
-          // 2. 音声を解析
+          // 2. 音声を解析（通話時間3秒未満は無音・会話なし判定）
           let analysis: any = null;
-          if (log.audio_url) {
+          const durationSec = typeof log.duration !== 'undefined' ? Number(log.duration) : 999;
+
+          if (durationSec < 3) {
+            console.log(`[DEBUG] Call duration is ${durationSec}s (< 3s). Skipping Gemini call and categorizing as '無音・会話なし（応答なし）'.`);
+            analysis = {
+              callerName: "不明",
+              subjectName: "不明",
+              responderNames: ["不明（名乗らず）"],
+              inquiryType: "無音・会話なし（応答なし）",
+              details: ["・無音または会話なしの通話"],
+              transcription: []
+            };
+          } else if (log.audio_url) {
             const audio = await fetchAudioAsBase64(log.audio_url);
             const accountName = log.account_name || "";
             const staffList = staffMap.get(accountName) || [];
