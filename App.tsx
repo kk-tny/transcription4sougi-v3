@@ -468,7 +468,7 @@ export default function App() {
         )}
 
         <footer className="text-center pt-4">
-            <p className="text-xs text-slate-400 font-medium tracking-wide">© 2024 Funeral Support System | Powered by Gemini 3 Flash</p>
+            <p className="text-xs text-slate-400 font-medium tracking-wide">© 2024 Funeral Support System | Powered by Gemini 3.5 Flash</p>
         </footer>
       </div>
     </div>
